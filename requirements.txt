@@ -4,6 +4,9 @@ click>=8.1.0
 pyyaml>=6.0
 json5>=0.9.0
 
+# LSP client
+pygls>=1.0.0
+
 # CFG and analysis
 networkx>=2.8.0
 matplotlib>=3.5.0
