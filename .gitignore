@@ -2,3 +2,4 @@
 AFLplusplus/
 venv/
 libs/
+afl_libs/
