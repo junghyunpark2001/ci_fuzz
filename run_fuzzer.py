@@ -29,15 +29,33 @@ def create_seeds(seed_dir):
 def main():
     if len(sys.argv) < 2:
         print("Usage: python3 run_fuzzer.py <harness_binary> [duration_seconds]")
-        print("Example: python3 run_fuzzer.py generated_harnesses/libxml2/harness_xmlFileClose 3600")
+        print("Example: python3 run_fuzzer.py generated_harnesses/libxml2-8689523a/harness_xmlFileClose 3600")
         sys.exit(1)
     
     harness = sys.argv[1]
     duration = sys.argv[2] if len(sys.argv) > 2 else None
     
+    # If user provided .c file, remove extension to get binary
+    if harness.endswith('.c'):
+        harness = harness[:-2]
+        print(f"[INFO] Detected .c extension, using binary: {harness}")
+    
     if not os.path.exists(harness):
         print(f"[ERROR] Harness not found: {harness}")
         sys.exit(1)
+    
+    # Infer library name and commit hash from harness path
+    # Expected path format: generated_harnesses/libxml2-<hash>/harness_xxx
+    harness_dir = os.path.dirname(harness)
+    harness_dir_name = os.path.basename(harness_dir)
+    
+    # Extract lib_name and commit hash
+    if '-' in harness_dir_name:
+        lib_name, commit_hash = harness_dir_name.rsplit('-', 1)
+    else:
+        # Fallback: assume libxml2 with no specific commit
+        lib_name = harness_dir_name
+        commit_hash = None
     
     # Setup
     seed_dir = tempfile.mkdtemp(prefix="afl_seeds_")
@@ -48,17 +66,32 @@ def main():
     
     create_seeds(seed_dir)
     
-    # Environment
+    # Environment - use commit-specific build if available
     project_root = os.path.dirname(os.path.abspath(__file__))
-    lib_path = os.path.join(project_root, 'afl_libs', 'libxml2', '.libs')
+    if commit_hash:
+        # Use commit-specific build directory
+        build_dir_name = f'{lib_name}-{commit_hash}'
+        lib_path = os.path.join(project_root, 'afl_libs', build_dir_name, '.libs')
+        print(f"[INFO] Using library from: {lib_path}")
+    else:
+        # Fallback to default path
+        lib_path = os.path.join(project_root, 'afl_libs', lib_name, '.libs')
+        print(f"[INFO] Using library from (fallback): {lib_path}")
+    
+    if not os.path.exists(lib_path):
+        print(f"[ERROR] Library path not found: {lib_path}")
+        print(f"[HINT] Make sure the library was built for commit {commit_hash}")
+        sys.exit(1)
+    
     env = os.environ.copy()
     env['LD_LIBRARY_PATH'] = lib_path + ':' + env.get('LD_LIBRARY_PATH', '')
     env['AFL_SKIP_CPUFREQ'] = '1'
     env['AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES'] = '1'
     env['AFL_AUTORESUME'] = '1'
     
-    # Command
-    cmd = ['afl-fuzz', '-i', seed_dir, '-o', output_dir]
+    # Command - Use AFL++ with libFuzzer mode (-L 0)
+    # -L 0 tells AFL++ to use libFuzzer-compatible mode
+    cmd = ['afl-fuzz', '-i', seed_dir, '-o', output_dir, '-L', '0']
     if duration:
         cmd.extend(['-V', duration])
     cmd.extend(['--', harness])

@@ -6,3 +6,7 @@ afl_libs/
 generated_harnesses/
 afl_output/
 *.pyc
+fuzz_corpus/
+
+tempfile.txt
+testfile.txt

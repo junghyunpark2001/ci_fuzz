@@ -134,27 +134,30 @@ def _build_prompt(api: str, decl: Optional[str], definition_snippet: Optional[st
     parts.append(
         textwrap.dedent(
             f"""
-            Please write a single C harness file that:
+            Please write a libFuzzer-style C harness file that:
+            - Uses the signature: int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
             - Includes the correct headers for {api} (use angle brackets, not quotes)
             - {include_hint}
-            - MUST initialize the library properly (e.g., xmlInitParser() for libxml2)
+            - MUST initialize the library properly in a static initializer or first call
             - MUST handle null pointers and errors safely (check return values)
-            - Invokes {api} with VALID, non-null arguments (create proper objects/contexts first)
-            - Uses simple, deterministic inputs (no stdin/AFL input for now - keep it runnable)
-            - Cleans up resources properly (free memory, close handles)
+            - Uses the fuzzer input (data, size) to call {api} with VALID arguments
+            - Cleans up resources properly (free memory, close handles) before returning
             - Returns 0 on success
             
             CRITICAL SAFETY RULES:
             - Never pass NULL to any API function
+            - Always validate size > 0 and size is reasonable before using data
             - Always initialize library-specific contexts before using APIs
             - Check all return values and handle errors
-            - Use stack-allocated or simple heap data when possible
-            - The harness MUST run without crashing even with no input files
+            - Clean up all allocated resources before returning
+            - The harness MUST NOT crash on any input (empty, large, malformed)
             
-            Constraints:
-            - No external deps beyond standard C and the library's public headers
-            - Must compile as a standalone .c file
+            Format requirements:
+            - Use LLVMFuzzerTestOneInput as the entry point (NOT main())
+            - Function signature: int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
+            - Include <stdint.h> and <stddef.h> for uint8_t and size_t
             - Use angle brackets for library headers: #include <libxml/...> not #include "libxml/..."
+            
             Output: Only the C code. No markdown, no explanations.
             """
         ).strip()
@@ -204,24 +207,39 @@ def _strip_markdown_fences(code: str) -> str:
     return code.strip()
 
 
-def _try_compile_harness(harness_path: str, lib_name: str, repo_path: str, api: str) -> Tuple[bool, str]:
+def _try_compile_harness(harness_path: str, lib_name: str, repo_path: str, api: str, 
+                        build_dir: Optional[str] = None) -> Tuple[bool, str]:
     """
     Attempt to compile the harness with AFL.
     Returns (success: bool, error_message: str)
+    
+    Args:
+        harness_path: Path to the harness .c file
+        lib_name: Name of the library (e.g., 'libxml2')
+        repo_path: Path to the library source repository (for fallback)
+        api: API function name
+        build_dir: Optional commit-specific build directory to use for include/lib paths
     """
-    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-    include_dir = os.path.join(project_root, 'afl_libs', lib_name, 'include')
-    lib_dir = os.path.join(project_root, 'afl_libs', lib_name, '.libs')
+    if build_dir:
+        # Use commit-specific build directory
+        include_dir = os.path.join(build_dir, 'include')
+        lib_dir = os.path.join(build_dir, '.libs')
+    else:
+        # Fallback to default paths
+        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+        include_dir = os.path.join(project_root, 'afl_libs', lib_name, 'include')
+        lib_dir = os.path.join(project_root, 'afl_libs', lib_name, '.libs')
     
     # Sanitize lib name for -l flag (e.g., libxml2 -> xml2)
     lib_flag = lib_name.replace('lib', '', 1) if lib_name.startswith('lib') else lib_name
     
     out_bin = harness_path.replace('.c', '')
     
-    # Try afl-clang-fast with ASAN, fallback to clang with ASAN
+    # For libFuzzer-style harnesses, use -fsanitize=fuzzer,address
+    # Try afl-clang-fast, then clang
     compilers = [
-        ['afl-clang-fast', '-fsanitize=address'],
-        ['clang', '-fsanitize=address'],
+        ['afl-clang-fast', '-fsanitize=fuzzer,address'],
+        ['clang', '-fsanitize=fuzzer,address'],
     ]
     
     for compiler_config in compilers:
@@ -301,11 +319,21 @@ def _fix_harness_with_feedback(api: str, original_prompt: str, code: str, error:
 
 
 def generate_harness_for_apis(repo_path: str, lib_name: str, api_names: Set[str], out_dir: str,
-                              model: str = "gpt-4o-mini", max_retries: int = 3) -> Dict[str, str]:
+                              model: str = "gpt-4o-mini", max_retries: int = 3, 
+                              build_dir_override: Optional[str] = None) -> Dict[str, str]:
     """
     For each API, collect declaration/definition and ask GPT to synthesize a harness.
     Validates compilation with AFL and retries up to max_retries times if build fails.
     Returns a map: api_name -> output_file_path
+    
+    Args:
+        repo_path: Path to the library source repository
+        lib_name: Name of the library (e.g., 'libxml2')
+        api_names: Set of API function names to generate harnesses for
+        out_dir: Output directory for generated harness files
+        model: OpenAI model to use for generation
+        max_retries: Maximum number of compilation retry attempts
+        build_dir_override: Optional commit-specific build directory for compilation
     """
     os.makedirs(out_dir, exist_ok=True)
     outputs: Dict[str, str] = {}
@@ -320,23 +348,38 @@ def generate_harness_for_apis(repo_path: str, lib_name: str, api_names: Set[str]
         generated = _call_openai(prompt, model=model)
 
         if not generated:
-            # Offline fallback stub
+            # Offline fallback stub - libFuzzer style
             header_hint = "#include <libxml/parser.h>\n" if lib_name == 'libxml2' else ""
-            init_hint = "    xmlInitParser();\n" if lib_name == 'libxml2' else ""
-            cleanup_hint = "    xmlCleanupParser();\n" if lib_name == 'libxml2' else ""
+            static_init = ""
+            if lib_name == 'libxml2':
+                static_init = (
+                    "static int initialized = 0;\n"
+                    "static void init_once(void) {\n"
+                    "    if (!initialized) {\n"
+                    "        xmlInitParser();\n"
+                    "        initialized = 1;\n"
+                    "    }\n"
+                    "}\n\n"
+                )
             
             generated = (
                 f"/* Offline stub harness for {lib_name}:{api}. Set OPENAI_API_KEY to enable LLM generation. */\n"
                 + header_hint +
+                "#include <stdint.h>\n"
+                "#include <stddef.h>\n"
                 "#include <stdio.h>\n"
                 "#include <stdlib.h>\n\n"
-                "int main(int argc, char **argv) {\n"
-                + init_hint +
-                f"    // TODO: include proper headers and call {api} with valid, non-null arguments.\n"
-                f"    // IMPORTANT: Initialize library context and check for null before calling {api}\n"
-                f"    // Compile with: afl-clang-fast -fsanitize=address -I../../afl_libs/{lib_name}/include harness_{api}.c -L../../afl_libs/{lib_name}/.libs -l{lib_name.replace('lib', '')} -o harness_{api}\n"
-                "    (void)argc; (void)argv;\n"
-                + cleanup_hint +
+                + static_init +
+                "int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {\n"
+                + ("    init_once();\n" if lib_name == 'libxml2' else "") +
+                "    \n"
+                f"    // TODO: Use data and size to call {api} with valid, non-null arguments.\n"
+                f"    // IMPORTANT: Validate size, initialize library context, check for null\n"
+                "    if (size == 0) return 0;\n"
+                "    \n"
+                f"    // Example: Parse data and call {api}\n"
+                "    // Clean up all resources before returning\n"
+                "    \n"
                 "    return 0;\n"
                 "}\n"
             )
@@ -354,7 +397,7 @@ def generate_harness_for_apis(repo_path: str, lib_name: str, api_names: Set[str]
                 print(f"[HARNESS] Wrote {out_file} (attempt {attempt + 1}/{max_retries})")
                 
                 # Try to compile
-                success, error = _try_compile_harness(out_file, lib_name, repo_path, api)
+                success, error = _try_compile_harness(out_file, lib_name, repo_path, api, build_dir_override)
                 
                 if success:
                     build_success = True

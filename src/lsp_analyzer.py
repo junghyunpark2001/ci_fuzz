@@ -8,16 +8,18 @@ import re
 from typing import Set, List, Dict
 from .lsp_client import build_call_graph_with_lsp
 
-def find_public_apis(repo_path: str) -> Set[str]:
+def find_public_apis(build_dir: str) -> Set[str]:
     """
     Extract public API functions from built libraries using nm
     If failed, fallback to extract using regex from include/ headers
+    
+    Args:
+        build_dir: Path to the commit-specific build directory (e.g., afl_libs/libxml2-<hash>)
     """
     public_apis = set()
     lib_dirs = [
-        os.path.join(repo_path, '..', 'afl_libs', 'libxml2'),
-        os.path.join(repo_path, 'afl_libs', 'libxml2'),
-        os.path.join(repo_path, '.libs'),
+        os.path.join(build_dir, '.libs'),
+        build_dir,
     ]
     tried_files = set()
     found_any = False
@@ -46,7 +48,7 @@ def find_public_apis(repo_path: str) -> Set[str]:
         return public_apis
     # Fallback: include/ 헤더에서 정규식 추출
     print("[WARN] No public APIs found in built libraries, falling back to include/ header scan.")
-    include_dir = os.path.join(repo_path, 'include')
+    include_dir = os.path.join(build_dir, 'include')
     if not os.path.isdir(include_dir):
         print(f"[WARN] include directory not found: {include_dir}")
         return public_apis
@@ -64,9 +66,13 @@ def find_public_apis(repo_path: str) -> Set[str]:
     
     return public_apis
 
-def find_compile_commands(repo_path: str) -> str:
-    """find or generate compile_commands.json"""
-    compile_commands_path = os.path.join(repo_path, 'compile_commands.json')
+def find_compile_commands(build_dir: str) -> str:
+    """find or generate compile_commands.json
+    
+    Args:
+        build_dir: Path to the commit-specific build directory (e.g., afl_libs/libxml2-<hash>)
+    """
+    compile_commands_path = os.path.join(build_dir, 'compile_commands.json')
     
     if os.path.exists(compile_commands_path):
         return compile_commands_path
@@ -74,7 +80,7 @@ def find_compile_commands(repo_path: str) -> str:
     # bear를 사용하여 compile_commands.json 생성
     print("[INFO] Generating compile_commands.json with bear...")
     try:
-        subprocess.run(['bear', '--', 'make', '-j'], cwd=repo_path, check=True)
+        subprocess.run(['bear', '--', 'make', '-j'], cwd=build_dir, check=True)
         if os.path.exists(compile_commands_path):
             return compile_commands_path
     except Exception as e:
@@ -82,14 +88,18 @@ def find_compile_commands(repo_path: str) -> str:
     
     return None
 
-def find_related_public_apis(repo_path: str, changed_functions: Dict[str, Set[str]]) -> Set[str]:
+def find_related_public_apis(build_dir: str, changed_functions: Dict[str, Set[str]]) -> Set[str]:
     """
     Find public APIs related to changed functions
     1. extract public API list
     2. check if changed functions are public APIs (direct relation)
     3. analyze call graph to find indirectly related APIs
+    
+    Args:
+        build_dir: Path to the commit-specific build directory (e.g., afl_libs/libxml2-<hash>)
+        changed_functions: Dict mapping file paths to sets of changed function names
     """
-    public_apis = find_public_apis(repo_path)
+    public_apis = find_public_apis(build_dir)
     related_apis = set()
     
 
@@ -105,7 +115,7 @@ def find_related_public_apis(repo_path: str, changed_functions: Dict[str, Set[st
     print("\n[STEP 3.2] Building call graph to find indirectly related APIs...")
     print("[INFO] This may take a while...")
     
-    indirect_apis = build_call_graph_with_lsp(repo_path, changed_functions, public_apis, max_depth=3)
+    indirect_apis = build_call_graph_with_lsp(build_dir, changed_functions, public_apis, max_depth=3)
     
     # exclude directly related APIs
     indirect_apis = indirect_apis - related_apis

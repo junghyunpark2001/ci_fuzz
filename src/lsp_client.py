@@ -14,8 +14,13 @@ import re
 class ClangdLSPClient:
     """client for communicating with clangd LSP server via JSON-RPC"""
 
-    def __init__(self, repo_path: str):
-        self.repo_path = repo_path
+    def __init__(self, build_dir: str):
+        """Initialize clangd client with build directory
+        
+        Args:
+            build_dir: Path to the commit-specific build directory containing compile_commands.json
+        """
+        self.build_dir = build_dir
         self.process = None
         self.msg_id = 0
         self.responses = {}
@@ -23,23 +28,23 @@ class ClangdLSPClient:
         
     def start(self):
         """Start the clangd LSP server"""
-        compile_commands = os.path.join(self.repo_path, 'compile_commands.json')
+        compile_commands = os.path.join(self.build_dir, 'compile_commands.json')
         if not os.path.exists(compile_commands):
             print(f"[WARN] compile_commands.json not found at {compile_commands}")
             print("[INFO] Attempting to generate with bear...")
             try:
-                subprocess.run(['bear', '--', 'make', '-j'], cwd=self.repo_path, 
+                subprocess.run(['bear', '--', 'make', '-j'], cwd=self.build_dir, 
                              timeout=300, check=False)
             except Exception as e:
                 print(f"[WARN] Could not generate compile_commands.json: {e}")
             
         try:
             self.process = subprocess.Popen(
-                ['clangd', '--compile-commands-dir=' + self.repo_path, '--background-index'],
+                ['clangd', '--compile-commands-dir=' + self.build_dir, '--background-index'],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                cwd=self.repo_path,
+                cwd=self.build_dir,
                 bufsize=0
             )
             
@@ -50,7 +55,7 @@ class ClangdLSPClient:
             # send initialize request
             response = self._send_request('initialize', {
                 "processId": os.getpid(),
-                "rootUri": f"file://{self.repo_path}",
+                "rootUri": f"file://{self.build_dir}",
                 "capabilities": {
                     "textDocument": {
                         "callHierarchy": {
@@ -229,18 +234,24 @@ class ClangdLSPClient:
             self.process.terminate()
             self.process.wait(timeout=5)
 
-def build_call_graph_with_lsp(repo_path: str, changed_functions: Dict[str, Set[str]], 
+def build_call_graph_with_lsp(build_dir: str, changed_functions: Dict[str, Set[str]], 
                               public_apis: Set[str], max_depth: int = 3) -> Set[str]:
     """
     Using clangd LSP to build call graph and find related public APIs
+    
+    Args:
+        build_dir: Path to the commit-specific build directory containing compile_commands.json
+        changed_functions: Dict mapping file paths to sets of changed function names
+        public_apis: Set of known public API function names
+        max_depth: Maximum call chain depth to explore
     """
     related_apis = set()
     
     # start clangd
-    client = ClangdLSPClient(repo_path)
+    client = ClangdLSPClient(build_dir)
     if not client.start():
         print("[ERROR] Failed to start clangd, falling back to simple analysis")
-        return build_call_graph_simple(repo_path, changed_functions, public_apis, max_depth)
+        return build_call_graph_simple(build_dir, changed_functions, public_apis, max_depth)
     
     print("[INFO] clangd LSP server started successfully")
     
@@ -249,7 +260,7 @@ def build_call_graph_with_lsp(repo_path: str, changed_functions: Dict[str, Set[s
         
         # start from each changed function
         for file_path, functions in changed_functions.items():
-            full_file_path = os.path.join(repo_path, file_path)
+            full_file_path = os.path.join(build_dir, file_path)
             
             if not os.path.exists(full_file_path):
                 continue
@@ -285,10 +296,16 @@ def build_call_graph_with_lsp(repo_path: str, changed_functions: Dict[str, Set[s
     
     return related_apis
 
-def build_call_graph_simple(repo_path: str, changed_functions: Dict[str, Set[str]], 
+def build_call_graph_simple(build_dir: str, changed_functions: Dict[str, Set[str]], 
                            public_apis: Set[str], max_depth: int = 3) -> Set[str]:
     """
     간단한 grep 기반 call graph 분석 (fallback)
+    
+    Args:
+        build_dir: Path to the commit-specific build directory
+        changed_functions: Dict mapping file paths to sets of changed function names
+        public_apis: Set of known public API function names
+        max_depth: Maximum call chain depth to explore
     """
     related_apis = set()
     visited = set()
@@ -313,7 +330,7 @@ def build_call_graph_simple(repo_path: str, changed_functions: Dict[str, Set[str
                 # grep으로 호출자 찾기
                 try:
                     result = subprocess.run(
-                        ['grep', '-r', '-n', f'{current_func}(', repo_path, 
+                        ['grep', '-r', '-n', f'{current_func}(', build_dir, 
                          '--include=*.c', '--include=*.cpp', '--include=*.h'],
                         capture_output=True, text=True, timeout=10
                     )

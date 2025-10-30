@@ -60,5 +60,5 @@ python3 run_fuzzer.py generated_harnesses/libxml2/harness_xmlFileClose 3600
 
 ```bash
 # Full pipeline
-python3 main.py --library libxml2 --commit 22f9d730
+python3 main.py --library libxml2 --commit 8689523a
 ```
