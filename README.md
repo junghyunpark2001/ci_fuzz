@@ -6,15 +6,6 @@ Automatically produce a usable fuzzing harness for a specified library + commit,
 
 ### Program Setup
 
-
-# CI LLM Fuzzer
-
-Automatically produce a usable fuzzing harness for a specified library + commit, run fuzzers in CI.
-
-## Quick Start
-
-### Program Setup
-
 ```bash
 # project root directory
 ./setup.sh
