@@ -1,4 +1,3 @@
-````markdown
 # CI LLM Fuzzer
 
 Automatically produce a usable fuzzing harness for a specified library + commit, run fuzzers in CI.
@@ -114,4 +113,3 @@ find "$SRC" -maxdepth 2 -type f \( -name "*.so*" -o -name "*.a" -o -name "*.la" 
 [[ -f "$SRC/build/compile_commands.json" ]] && cp "$SRC/build/compile_commands.json" "$OUT_DIR/" || true
 rsync -a --include='*/' --include='*.c' --include='*.cc' --include='*.cpp' --include='*.h' --exclude='*' "$SRC/" "$OUT_DIR/src/" || true
 [[ -d "$SRC/include" ]] && cp -r "$SRC/include/"* "$OUT_DIR/include/" || true
-```
