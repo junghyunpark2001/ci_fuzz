@@ -7,6 +7,15 @@ Automatically produce a usable fuzzing harness for a specified library + commit,
 
 ### Program Setup
 
+
+# CI LLM Fuzzer
+
+Automatically produce a usable fuzzing harness for a specified library + commit, run fuzzers in CI.
+
+## Quick Start
+
+### Program Setup
+
 ```bash
 # project root directory
 ./setup.sh
@@ -17,7 +26,6 @@ Automatically produce a usable fuzzing harness for a specified library + commit,
 ```bash
 # Start virtual environment
 source venv/bin/activate
-
 
 # With GPT harness generation (optional but strongly recommend)
 export OPENAI_API_KEY="sk-..."
@@ -64,8 +72,46 @@ deactivate
 - Resume previous fuzzing sessions automatically
 
 ## Examples
+
 ```bash
 # Full pipeline
 python3 main.py --library libxml2 --commit 8689523a
 python3 main.py --library libxml2 --commit 17d950ae
+```
+
+## Adding a new library
+
+- Provide a build script at the repo root named `build_<lib>.sh` (executable). If absent, extend `build_lib.sh`'s case switch. `main.py` will call it as: `BUILD_DIR=<out> ./build_<lib>.sh <lib>`.
+- Script contract: MUST populate `$BUILD_DIR` with the following after a successful build:
+  - `$BUILD_DIR/include/` — public headers
+  - `$BUILD_DIR/.libs/` — built libraries (`*.so*`, `*.a`)
+  - `$BUILD_DIR/compile_commands.json` — required for clangd/LSP (use `bear -- make ...` or CMake with `-DCMAKE_EXPORT_COMPILE_COMMANDS=ON`)
+  - `$BUILD_DIR/src/` — sources (copy or rsync only .c/.cc/.cpp/.h)
+- Use AFL compilers in the script: `CC=afl-clang-fast`, `CXX=afl-clang-fast++` (set via `export`). Exit non-zero on failure.
+- Quick check: `tree $BUILD_DIR` should show include/, .libs/, compile_commands.json, and src/.
+
+Minimal script template:
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+LIB="$1"                           # e.g., zlib
+OUT_DIR="${BUILD_DIR:?missing}"    # set by main.py
+SRC="$ROOT/libs/$LIB"              # your checked-out repo
+
+export CC=afl-clang-fast CXX=afl-clang-fast++
+
+# configure & build (examples)
+# (cd "$SRC" && ./configure); (cd "$SRC" && bear -- make -j"$(nproc)")
+# or CMake: (cd "$SRC" && mkdir -p build && cd build \
+#   && cmake -DCMAKE_C_COMPILER=$CC -DCMAKE_CXX_COMPILER=$CXX -DCMAKE_EXPORT_COMPILE_COMMANDS=ON .. \
+#   && make -j"$(nproc)")
+
+rm -rf "$OUT_DIR"; mkdir -p "$OUT_DIR/.libs" "$OUT_DIR/include" "$OUT_DIR/src"
+find "$SRC" -maxdepth 2 -type f \( -name "*.so*" -o -name "*.a" -o -name "*.la" \) -exec cp {} "$OUT_DIR/.libs/" \; || true
+[[ -f "$SRC/compile_commands.json" ]] && cp "$SRC/compile_commands.json" "$OUT_DIR/" || true
+[[ -f "$SRC/build/compile_commands.json" ]] && cp "$SRC/build/compile_commands.json" "$OUT_DIR/" || true
+rsync -a --include='*/' --include='*.c' --include='*.cc' --include='*.cpp' --include='*.h' --exclude='*' "$SRC/" "$OUT_DIR/src/" || true
+[[ -d "$SRC/include" ]] && cp -r "$SRC/include/"* "$OUT_DIR/include/" || true
 ```
