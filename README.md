@@ -8,6 +8,7 @@ Automatically produce a usable fuzzing harness for a specified library + commit,
 
 ```bash
 # project root directory
+./build_lib.sh
 ./setup.sh
 ```
 
@@ -22,6 +23,9 @@ export OPENAI_API_KEY="sk-..."
 
 # Analyze commit and generate harnesses
 python3 main.py --library <library-name> --commit <commit>
+
+# finish virtual environment
+deactivate
 ```
 
 ### Continuous Fuzzing (Independent of Pipeline)
@@ -32,9 +36,6 @@ python3 run_fuzzer.py generated_harnesses/libxml2/harness_xmlFileClose
 
 # Fuzz for 1 hour
 python3 run_fuzzer.py generated_harnesses/libxml2/harness_xmlFileClose 3600
-
-# finish virtual environment
-deactivate
 ```
 
 ## Features
