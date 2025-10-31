@@ -54,7 +54,9 @@ def checkout_and_build_commit(repo_path: str, commit: str, lib_name: str) -> str
         sys.exit(1)
     
     # Build with AFL
-    build_script = os.path.join(project_root, 'build_lib.sh')
+    # Prefer a library-specific build script if present: build_<lib>.sh
+    candidate_script = os.path.join(project_root, f'build_{lib_name}.sh')
+    build_script = candidate_script if os.path.exists(candidate_script) else os.path.join(project_root, 'build_lib.sh')
     try:
         env = os.environ.copy()
         env['BUILD_DIR'] = build_dir

@@ -15,6 +15,10 @@ Automatically produce a usable fuzzing harness for a specified library + commit,
 ### One-Shot Pipeline (Analysis + Harness Generation + Quick Validation)
 
 ```bash
+# Start virtual environment
+source venv/bin/activate
+
+
 # With GPT harness generation (optional but strongly recommend)
 export OPENAI_API_KEY="sk-..."
 
@@ -30,6 +34,9 @@ python3 run_fuzzer.py generated_harnesses/libxml2/harness_xmlFileClose
 
 # Fuzz for 1 hour
 python3 run_fuzzer.py generated_harnesses/libxml2/harness_xmlFileClose 3600
+
+# finish virtual environment
+deactivate
 ```
 
 ## Features
@@ -57,8 +64,8 @@ python3 run_fuzzer.py generated_harnesses/libxml2/harness_xmlFileClose 3600
 - Resume previous fuzzing sessions automatically
 
 ## Examples
-
 ```bash
 # Full pipeline
 python3 main.py --library libxml2 --commit 8689523a
+python3 main.py --library libxml2 --commit 17d950ae
 ```

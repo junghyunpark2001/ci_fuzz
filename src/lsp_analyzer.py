@@ -115,7 +115,7 @@ def find_related_public_apis(build_dir: str, changed_functions: Dict[str, Set[st
     print("\n[STEP 3.2] Building call graph to find indirectly related APIs...")
     print("[INFO] This may take a while...")
     
-    indirect_apis = build_call_graph_with_lsp(build_dir, changed_functions, public_apis, max_depth=3)
+    indirect_apis = build_call_graph_with_lsp(build_dir, changed_functions, public_apis, max_depth=10)
     
     # exclude directly related APIs
     indirect_apis = indirect_apis - related_apis
